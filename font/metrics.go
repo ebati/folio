@@ -70,53 +70,18 @@ type kernKey struct {
 // These are the most impactful pairs from the AFM (Adobe Font Metrics) files.
 var standardKernPairs = map[string]map[kernKey]int{
 	"Helvetica":             helveticaKernPairs,
-	"Helvetica-Bold":        helveticaKernPairs,
+	"Helvetica-Bold":        helveticaBoldKernPairs,
 	"Helvetica-Oblique":     helveticaKernPairs,
-	"Helvetica-BoldOblique": helveticaKernPairs,
-	"Times-Roman":           timesKernPairs,
-	"Times-Bold":            timesKernPairs,
-	"Times-Italic":          timesKernPairs,
-	"Times-BoldItalic":      timesKernPairs,
-}
-
-// helveticaKernPairs — most impactful kern pairs from the Helvetica AFM.
-var helveticaKernPairs = map[kernKey]int{
-	{'A', 'V'}: -80, {'A', 'W'}: -60, {'A', 'Y'}: -110, {'A', 'v'}: -40,
-	{'A', 'w'}: -40, {'A', 'y'}: -40, {'A', 'T'}: -90,
-	{'F', 'A'}: -80, {'F', 'a'}: -20, {'F', 'o'}: -30,
-	{'L', 'T'}: -90, {'L', 'V'}: -110, {'L', 'W'}: -80, {'L', 'Y'}: -120,
-	{'P', 'A'}: -100, {'P', 'a'}: -30, {'P', 'o'}: -40,
-	{'T', 'A'}: -90, {'T', 'a'}: -80, {'T', 'e'}: -60, {'T', 'o'}: -80,
-	{'T', 'r'}: -40, {'T', 'y'}: -60,
-	{'V', 'A'}: -80, {'V', 'a'}: -60, {'V', 'e'}: -50, {'V', 'o'}: -50,
-	{'W', 'A'}: -60, {'W', 'a'}: -40, {'W', 'e'}: -35, {'W', 'o'}: -35,
-	{'Y', 'A'}: -110, {'Y', 'a'}: -90, {'Y', 'e'}: -80, {'Y', 'o'}: -80,
-	{'Y', 'p'}: -50, {'Y', 'u'}: -60,
-	{'r', '.'}: -40, {'r', ','}: -40,
-	{'f', '.'}: -80, {'f', ','}: -80,
-}
-
-// timesKernPairs — most impactful kern pairs from the Times Roman AFM.
-var timesKernPairs = map[kernKey]int{
-	{'A', 'V'}: -135, {'A', 'W'}: -90, {'A', 'Y'}: -105, {'A', 'v'}: -55,
-	{'A', 'w'}: -55, {'A', 'y'}: -55, {'A', 'T'}: -95,
-	{'F', 'A'}: -115, {'F', 'a'}: -75, {'F', 'o'}: -105,
-	{'L', 'T'}: -92, {'L', 'V'}: -100, {'L', 'W'}: -74, {'L', 'Y'}: -100,
-	{'P', 'A'}: -92, {'P', 'a'}: -15, {'P', 'o'}: -35,
-	{'T', 'A'}: -95, {'T', 'a'}: -92, {'T', 'e'}: -92, {'T', 'o'}: -95,
-	{'T', 'r'}: -37, {'T', 'y'}: -37,
-	{'V', 'A'}: -135, {'V', 'a'}: -92, {'V', 'e'}: -100, {'V', 'o'}: -100,
-	{'W', 'A'}: -120, {'W', 'a'}: -65, {'W', 'e'}: -65, {'W', 'o'}: -75,
-	{'Y', 'A'}: -120, {'Y', 'a'}: -92, {'Y', 'e'}: -92, {'Y', 'o'}: -92,
-	{'Y', 'p'}: -55, {'Y', 'u'}: -92,
-	{'r', '.'}: -65, {'r', ','}: -65,
-	{'f', '.'}: -80, {'f', ','}: -80,
+	"Helvetica-BoldOblique": helveticaBoldKernPairs,
+	"Times-Roman":           timesRomanKernPairs,
+	"Times-Bold":            timesBoldKernPairs,
+	"Times-Italic":          timesItalicKernPairs,
+	"Times-BoldItalic":      timesBoldItalicKernPairs,
 }
 
 // standardWidths maps font name → (rune → width in 1/1000 units).
-// These are the standard widths from the PDF spec Appendix D.
-// Only the most common Latin characters are included; missing chars
-// fall back to the default width.
+// Generated from Adobe AFM files — see cmd/gen-metrics.
+// Kern pair data is in metrics_data.go (also generated).
 var standardWidths = map[string]map[rune]int{
 	"Helvetica":             helveticaWidths,
 	"Helvetica-Bold":        helveticaBoldWidths,

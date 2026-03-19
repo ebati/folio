@@ -57,6 +57,7 @@ type computedStyle struct {
 	// Layout
 	Display         string // "block", "inline", "flex", "none", "table", etc.
 	Float           string // "left", "right", "none"
+	Clear           string // "left", "right", "both", "none"
 	Width           *cssLength
 	Height          *cssLength
 	MaxWidth        *cssLength
@@ -161,6 +162,20 @@ type computedStyle struct {
 	// CSS transforms
 	Transform       string // raw CSS transform value, e.g. "rotate(45deg) scale(1.5)"
 	TransformOrigin string // e.g. "center center", "top left", "50% 50%"
+
+	// CSS custom properties (variables)
+	CustomProperties map[string]string
+
+	// CSS counters
+	CounterReset     []counterEntry // counter-reset declarations
+	CounterIncrement []counterEntry // counter-increment declarations
+}
+
+// counterEntry represents a single counter name/value pair in
+// counter-reset or counter-increment declarations.
+type counterEntry struct {
+	Name  string
+	Value int
 }
 
 // boxShadow represents a parsed CSS box-shadow value.
@@ -284,7 +299,7 @@ func defaultStyle() computedStyle {
 
 // inherit creates a child style that inherits text properties from the parent.
 func (s *computedStyle) inherit() computedStyle {
-	return computedStyle{
+	child := computedStyle{
 		FontFamily:     s.FontFamily,
 		FontSize:       s.FontSize,
 		FontWeight:     s.FontWeight,
@@ -309,6 +324,14 @@ func (s *computedStyle) inherit() computedStyle {
 		WordBreak:      s.WordBreak,
 		Hyphens:        s.Hyphens,
 	}
+	// CSS custom properties inherit: deep-copy the map.
+	if len(s.CustomProperties) > 0 {
+		child.CustomProperties = make(map[string]string, len(s.CustomProperties))
+		for k, v := range s.CustomProperties {
+			child.CustomProperties[k] = v
+		}
+	}
+	return child
 }
 
 // hasPadding returns true if any padding is set.

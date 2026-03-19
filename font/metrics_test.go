@@ -77,7 +77,7 @@ func TestMeasureStringSpace(t *testing.T) {
 func TestMeasureStringUnknownCharFallback(t *testing.T) {
 	// Characters not in the width table should use the default (key 0)
 	// Helvetica default = 278
-	got := Helvetica.MeasureString("\u00e9", 10) // é not in our table
+	got := Helvetica.MeasureString("\u4e16", 10) // 世 (CJK, not in our table)
 	expected := 2.78                             // default width 278/1000 * 10
 	if math.Abs(got-expected) > 0.001 {
 		t.Errorf("expected %.3f, got %.3f", expected, got)
@@ -157,8 +157,8 @@ func TestKernHelveticaAV(t *testing.T) {
 	if k >= 0 {
 		t.Errorf("expected negative kern for A-V, got %f", k)
 	}
-	if k != -80 {
-		t.Errorf("expected -80 for Helvetica A-V, got %f", k)
+	if k != -70 {
+		t.Errorf("expected -70 for Helvetica A-V (per AFM), got %f", k)
 	}
 }
 
@@ -185,12 +185,11 @@ func TestKernCourierNoKerning(t *testing.T) {
 	}
 }
 
-func TestKernHelveticaBoldSameAsRegular(t *testing.T) {
-	// Bold variant shares the same kern table.
-	k1 := Helvetica.Kern('T', 'o')
-	k2 := HelveticaBold.Kern('T', 'o')
-	if k1 != k2 {
-		t.Errorf("expected same kern for Helvetica and Bold: %f vs %f", k1, k2)
+func TestKernHelveticaBoldHasOwnTable(t *testing.T) {
+	// Bold variant now has its own kern table from AFM.
+	k := HelveticaBold.Kern('A', 'V')
+	if k >= 0 {
+		t.Errorf("expected negative kern for Helvetica-Bold A-V, got %f", k)
 	}
 }
 

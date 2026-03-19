@@ -135,7 +135,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 
 	ss := parseStyleBlocks(doc, o.BasePath)
 
-	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth}
+	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int)}
 
 	// Parse @page config early so containerWidth reflects the actual page size
 	// (e.g. landscape pages have a wider containerWidth).
@@ -186,7 +186,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 
 	ss := parseStyleBlocks(doc, o.BasePath)
 
-	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth}
+	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int)}
 
 	// Update containerWidth if @page specifies a different page size.
 	if len(ss.pageRules) > 0 {
@@ -227,6 +227,9 @@ type converter struct {
 	// Unicode fallback: lazily loaded when text contains non-WinAnsi characters.
 	fallbackFont       *font.EmbeddedFont
 	fallbackFontLoaded bool // true after first attempt (even if failed)
+
+	// CSS counters: maps counter name → stack of values (for nesting).
+	counters map[string][]int
 }
 
 // getFallbackFont returns a Unicode-capable embedded font for text that
@@ -375,24 +378,142 @@ func (c *converter) convertText(n *html.Node, style computedStyle) []layout.Elem
 	return []layout.Element{p}
 }
 
+// parseCounterEntries parses a counter-reset or counter-increment value.
+// defaultVal is the default value when no integer follows a name (0 for reset, 1 for increment).
+func parseCounterEntries(val string, defaultVal int) []counterEntry {
+	parts := strings.Fields(val)
+	var entries []counterEntry
+	for i := 0; i < len(parts); i++ {
+		name := parts[i]
+		if name == "none" {
+			return nil
+		}
+		value := defaultVal
+		if i+1 < len(parts) {
+			if v, err := strconv.Atoi(parts[i+1]); err == nil {
+				value = v
+				i++ // skip the number
+			}
+		}
+		entries = append(entries, counterEntry{Name: name, Value: value})
+	}
+	return entries
+}
+
+// resetCounter pushes a new counter value onto the stack for the given name.
+func (c *converter) resetCounter(name string, value int) {
+	c.counters[name] = append(c.counters[name], value)
+}
+
+// popCounter removes the most recently pushed counter for the given name.
+// Called when leaving an element that did counter-reset to restore nesting.
+func (c *converter) popCounter(name string) {
+	stack := c.counters[name]
+	if len(stack) > 0 {
+		c.counters[name] = stack[:len(stack)-1]
+	}
+}
+
+// incrementCounter adds value to the innermost counter for the given name.
+// If no counter exists, auto-instantiates one at the document root per CSS spec.
+func (c *converter) incrementCounter(name string, value int) {
+	stack := c.counters[name]
+	if len(stack) == 0 {
+		// Auto-instantiate at document root per CSS spec.
+		c.counters[name] = []int{value}
+		return
+	}
+	stack[len(stack)-1] += value
+}
+
+// getCounter returns the current (innermost) value of the named counter.
+func (c *converter) getCounter(name string) int {
+	stack := c.counters[name]
+	if len(stack) == 0 {
+		return 0
+	}
+	return stack[len(stack)-1]
+}
+
 // parsePseudoContent extracts the text from a CSS content property value.
-// Supports quoted strings and "none". Returns empty string for unsupported values.
-func parsePseudoContent(decls []cssDecl) string {
+// Supports quoted strings, counter(name), counters(name, separator), and
+// concatenation of the above. Returns empty string for unsupported values.
+func (c *converter) parsePseudoContent(decls []cssDecl) string {
 	for _, d := range decls {
 		if d.property == "content" {
 			val := strings.TrimSpace(d.value)
 			if val == "none" || val == "" {
 				return ""
 			}
-			// Remove surrounding quotes.
-			if (strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`)) ||
-				(strings.HasPrefix(val, `'`) && strings.HasSuffix(val, `'`)) {
-				return val[1 : len(val)-1]
-			}
-			return val
+			return c.resolveContentValue(val)
 		}
 	}
 	return ""
+}
+
+// resolveContentValue parses a CSS content value, resolving quoted strings,
+// counter() and counters() function calls.
+func (c *converter) resolveContentValue(val string) string {
+	var result strings.Builder
+	remaining := val
+	for len(remaining) > 0 {
+		remaining = strings.TrimSpace(remaining)
+		if len(remaining) == 0 {
+			break
+		}
+		// Quoted string.
+		if remaining[0] == '"' || remaining[0] == '\'' {
+			quote := remaining[0]
+			end := strings.IndexByte(remaining[1:], quote)
+			if end >= 0 {
+				result.WriteString(remaining[1 : end+1])
+				remaining = remaining[end+2:]
+				continue
+			}
+			// Malformed quote — treat rest as literal.
+			result.WriteString(remaining[1:])
+			break
+		}
+		// counters() function — must check before counter() to avoid prefix match.
+		if strings.HasPrefix(remaining, "counters(") {
+			closeIdx := strings.IndexByte(remaining, ')')
+			if closeIdx >= 0 {
+				inner := remaining[len("counters("):closeIdx]
+				parts := strings.SplitN(inner, ",", 2)
+				name := strings.TrimSpace(parts[0])
+				sep := "."
+				if len(parts) > 1 {
+					sep = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+				}
+				stack := c.counters[name]
+				strs := make([]string, len(stack))
+				for i, v := range stack {
+					strs[i] = strconv.Itoa(v)
+				}
+				result.WriteString(strings.Join(strs, sep))
+				remaining = remaining[closeIdx+1:]
+				continue
+			}
+		}
+		// counter() function.
+		if strings.HasPrefix(remaining, "counter(") {
+			closeIdx := strings.IndexByte(remaining, ')')
+			if closeIdx >= 0 {
+				name := strings.TrimSpace(remaining[len("counter("):closeIdx])
+				result.WriteString(strconv.Itoa(c.getCounter(name)))
+				remaining = remaining[closeIdx+1:]
+				continue
+			}
+		}
+		// Skip unknown token.
+		spIdx := strings.IndexByte(remaining, ' ')
+		if spIdx >= 0 {
+			remaining = remaining[spIdx+1:]
+		} else {
+			break
+		}
+	}
+	return result.String()
 }
 
 // generatePseudoElement creates a text element for ::before or ::after content.
@@ -436,6 +557,15 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 		style.BorderLeftWidth = 0
 	}
 
+	// Apply CSS counter-reset: push new counter values onto the stack.
+	for _, cr := range style.CounterReset {
+		c.resetCounter(cr.Name, cr.Value)
+	}
+	// Apply CSS counter-increment: add to the innermost counter.
+	for _, ci := range style.CounterIncrement {
+		c.incrementCounter(ci.Name, ci.Value)
+	}
+
 	// Apply box-sizing: border-box adjustment.
 	// CSS border-box means the declared width/height include padding and border.
 	// Our layout Div treats widthUnit as the OUTER width (it subtracts padding
@@ -473,7 +603,7 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 	// ::before pseudo-element.
 	if c.sheet != nil {
 		beforeDecls := c.sheet.matchingPseudoElementDeclarations(n, "before")
-		if text := parsePseudoContent(beforeDecls); text != "" {
+		if text := c.parsePseudoContent(beforeDecls); text != "" {
 			elem := c.generatePseudoElement(text, style)
 			elems = append([]layout.Element{elem}, elems...)
 		}
@@ -482,7 +612,7 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 	// ::after pseudo-element.
 	if c.sheet != nil {
 		afterDecls := c.sheet.matchingPseudoElementDeclarations(n, "after")
-		if text := parsePseudoContent(afterDecls); text != "" {
+		if text := c.parsePseudoContent(afterDecls); text != "" {
 			elem := c.generatePseudoElement(text, style)
 			elems = append(elems, elem)
 		}
@@ -528,6 +658,10 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 			item.ZIndex = style.ZIndex
 			c.absolutes = append(c.absolutes, item)
 		}
+		// Pop any counters that were reset by this element.
+		for _, cr := range style.CounterReset {
+			c.popCounter(cr.Name)
+		}
 		return nil // don't add to normal flow
 	}
 
@@ -560,6 +694,11 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 	// Page break after.
 	if style.PageBreakAfter == "always" {
 		elems = append(elems, layout.NewAreaBreak())
+	}
+
+	// Pop any counters that were reset by this element (restore nesting).
+	for _, cr := range style.CounterReset {
+		c.popCounter(cr.Name)
 	}
 
 	if len(before) > 0 {
@@ -2632,8 +2771,70 @@ func (c *converter) applyInlineStyle(attr string, style *computedStyle) {
 	}
 }
 
+// resolveVars replaces var(--name) and var(--name, fallback) references in a
+// CSS value string using the element's custom properties. Handles nested var()
+// calls and multiple var() references in a single value.
+func resolveVars(value string, style *computedStyle) string {
+	for {
+		idx := strings.Index(value, "var(")
+		if idx < 0 {
+			return value
+		}
+		// Find matching closing paren, accounting for nested parens.
+		depth := 0
+		end := -1
+		for i := idx + 4; i < len(value); i++ {
+			if value[i] == '(' {
+				depth++
+			}
+			if value[i] == ')' {
+				if depth == 0 {
+					end = i
+					break
+				}
+				depth--
+			}
+		}
+		if end < 0 {
+			return value // malformed, bail out
+		}
+
+		inner := value[idx+4 : end]
+		// Split on first comma for fallback.
+		name, fallback := inner, ""
+		if ci := strings.IndexByte(inner, ','); ci >= 0 {
+			name = strings.TrimSpace(inner[:ci])
+			fallback = strings.TrimSpace(inner[ci+1:])
+		} else {
+			name = strings.TrimSpace(name)
+		}
+
+		resolved := fallback
+		if style.CustomProperties != nil {
+			if v, ok := style.CustomProperties[name]; ok {
+				resolved = v
+			}
+		}
+		value = value[:idx] + resolved + value[end+1:]
+	}
+}
+
 // applyProperty applies a single CSS property to a computed style.
 func (c *converter) applyProperty(prop, val string, style *computedStyle) {
+	// Resolve var() references before any processing.
+	if strings.Contains(val, "var(") {
+		val = resolveVars(val, style)
+	}
+
+	// Store custom properties (CSS variables).
+	if strings.HasPrefix(prop, "--") {
+		if style.CustomProperties == nil {
+			style.CustomProperties = make(map[string]string)
+		}
+		style.CustomProperties[prop] = val
+		return
+	}
+
 	switch prop {
 	case "color":
 		if c, ok := parseColor(val); ok {
@@ -3036,6 +3237,11 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 		if v == "left" || v == "right" || v == "none" {
 			style.Float = v
 		}
+	case "clear":
+		v := strings.TrimSpace(strings.ToLower(val))
+		if v == "left" || v == "right" || v == "both" || v == "none" {
+			style.Clear = v
+		}
 	case "box-sizing":
 		v := strings.TrimSpace(strings.ToLower(val))
 		if v == "content-box" || v == "border-box" {
@@ -3132,6 +3338,12 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 		if v == "solid" || v == "dashed" || v == "dotted" || v == "double" || v == "wavy" {
 			style.TextDecorationStyle = v
 		}
+
+	// CSS counters
+	case "counter-reset":
+		style.CounterReset = parseCounterEntries(val, 0)
+	case "counter-increment":
+		style.CounterIncrement = parseCounterEntries(val, 1)
 	}
 }
 

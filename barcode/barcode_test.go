@@ -4,6 +4,7 @@
 package barcode
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/carlos7ags/folio/content"
@@ -70,6 +71,44 @@ func TestCode128AllPrintable(t *testing.T) {
 	}
 	if bc.Width() == 0 {
 		t.Error("expected non-zero width")
+	}
+}
+
+// --- Code 128 pattern validation tests ---
+
+func TestCode128PatternsLength(t *testing.T) {
+	for i, p := range code128Patterns {
+		if len(p) != 11 {
+			t.Errorf("pattern %d has %d bools, want 11", i, len(p))
+		}
+	}
+}
+
+func TestCode128PatternsStartWithBar(t *testing.T) {
+	for i, p := range code128Patterns {
+		if len(p) > 0 && !p[0] {
+			t.Errorf("pattern %d starts with space (false), want bar (true)", i)
+		}
+	}
+}
+
+func TestCode128PatternsUnique(t *testing.T) {
+	seen := make(map[string]int)
+	for i, p := range code128Patterns {
+		key := fmt.Sprintf("%v", p)
+		if prev, ok := seen[key]; ok {
+			t.Errorf("pattern %d is a duplicate of pattern %d", i, prev)
+		}
+		seen[key] = i
+	}
+}
+
+func TestCode128StopPattern(t *testing.T) {
+	if len(code128Stop) != 13 {
+		t.Errorf("stop pattern has %d bools, want 13", len(code128Stop))
+	}
+	if !code128Stop[0] {
+		t.Error("stop pattern should start with bar (true)")
 	}
 }
 

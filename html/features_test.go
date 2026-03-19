@@ -949,3 +949,320 @@ func TestDisplayTableWithBackground(t *testing.T) {
 func init() {
 	_ = strings.Contains("", "")
 }
+
+// --- CSS Custom Properties (Variables) ---
+
+func TestResolveVarsBasic(t *testing.T) {
+	style := &computedStyle{
+		CustomProperties: map[string]string{
+			"--color": "red",
+		},
+	}
+	got := resolveVars("var(--color)", style)
+	if got != "red" {
+		t.Errorf("expected %q, got %q", "red", got)
+	}
+}
+
+func TestResolveVarsFallback(t *testing.T) {
+	style := &computedStyle{} // no custom properties
+	got := resolveVars("var(--undefined, blue)", style)
+	if got != "blue" {
+		t.Errorf("expected %q, got %q", "blue", got)
+	}
+}
+
+func TestResolveVarsNested(t *testing.T) {
+	style := &computedStyle{
+		CustomProperties: map[string]string{
+			"--b": "green",
+		},
+	}
+	// --a is not defined, so fallback var(--b) is used, which resolves to green.
+	got := resolveVars("var(--a, var(--b))", style)
+	if got != "green" {
+		t.Errorf("expected %q, got %q", "green", got)
+	}
+}
+
+func TestResolveVarsMultiple(t *testing.T) {
+	style := &computedStyle{
+		CustomProperties: map[string]string{
+			"--width": "2px",
+			"--color": "#333",
+		},
+	}
+	got := resolveVars("var(--width) solid var(--color)", style)
+	if got != "2px solid #333" {
+		t.Errorf("expected %q, got %q", "2px solid #333", got)
+	}
+}
+
+func TestCSSVarInheritance(t *testing.T) {
+	htm := `<style>
+		.parent { --text-color: #ff0000; }
+		.child { color: var(--text-color); }
+	</style>
+	<div class="parent"><div class="child">Red text</div></div>`
+	elems, err := Convert(htm, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements")
+	}
+	// The element should render without error.
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: 400, Height: 1000})
+	if plan.Status != layout.LayoutFull {
+		t.Errorf("expected LayoutFull, got %v", plan.Status)
+	}
+}
+
+func TestCSSVarFallbackIntegration(t *testing.T) {
+	htm := `<style>
+		div { color: var(--missing, blue); }
+	</style>
+	<div>Blue text</div>`
+	elems, err := Convert(htm, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements")
+	}
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: 400, Height: 1000})
+	if plan.Status != layout.LayoutFull {
+		t.Errorf("expected LayoutFull, got %v", plan.Status)
+	}
+}
+
+func TestCSSVarChained(t *testing.T) {
+	// --a references --b which is defined
+	style := &computedStyle{
+		CustomProperties: map[string]string{
+			"--b": "10px",
+		},
+	}
+	got := resolveVars("var(--a, var(--b))", style)
+	if got != "10px" {
+		t.Errorf("expected %q, got %q", "10px", got)
+	}
+}
+
+// --- CSS counters ---
+
+func TestParseCounterEntries(t *testing.T) {
+	// Single name, default value.
+	entries := parseCounterEntries("section", 0)
+	if len(entries) != 1 || entries[0].Name != "section" || entries[0].Value != 0 {
+		t.Errorf("expected [{section 0}], got %v", entries)
+	}
+
+	// Name with explicit value.
+	entries = parseCounterEntries("item 5", 0)
+	if len(entries) != 1 || entries[0].Name != "item" || entries[0].Value != 5 {
+		t.Errorf("expected [{item 5}], got %v", entries)
+	}
+
+	// Multiple counters.
+	entries = parseCounterEntries("a 1 b 2", 0)
+	if len(entries) != 2 || entries[0].Name != "a" || entries[0].Value != 1 || entries[1].Name != "b" || entries[1].Value != 2 {
+		t.Errorf("expected [{a 1} {b 2}], got %v", entries)
+	}
+
+	// "none" returns nil.
+	entries = parseCounterEntries("none", 0)
+	if entries != nil {
+		t.Errorf("expected nil for 'none', got %v", entries)
+	}
+
+	// Default value for increment.
+	entries = parseCounterEntries("section", 1)
+	if len(entries) != 1 || entries[0].Value != 1 {
+		t.Errorf("expected value 1 for increment default, got %v", entries)
+	}
+}
+
+func TestCounterMethods(t *testing.T) {
+	c := &converter{counters: make(map[string][]int)}
+
+	// getCounter returns 0 for unset counter.
+	if v := c.getCounter("x"); v != 0 {
+		t.Errorf("expected 0 for unset counter, got %d", v)
+	}
+
+	// Auto-instantiate via increment.
+	c.incrementCounter("x", 1)
+	if v := c.getCounter("x"); v != 1 {
+		t.Errorf("expected 1 after auto-instantiate increment, got %d", v)
+	}
+
+	// Reset counter.
+	c.resetCounter("x", 0)
+	if v := c.getCounter("x"); v != 0 {
+		t.Errorf("expected 0 after reset, got %d", v)
+	}
+
+	// Increment after reset.
+	c.incrementCounter("x", 1)
+	if v := c.getCounter("x"); v != 1 {
+		t.Errorf("expected 1 after increment, got %d", v)
+	}
+	c.incrementCounter("x", 2)
+	if v := c.getCounter("x"); v != 3 {
+		t.Errorf("expected 3 after increment by 2, got %d", v)
+	}
+
+	// Nested counters via reset.
+	c.resetCounter("x", 10)
+	if v := c.getCounter("x"); v != 10 {
+		t.Errorf("expected 10 after nested reset, got %d", v)
+	}
+	c.popCounter("x")
+	if v := c.getCounter("x"); v != 3 {
+		t.Errorf("expected 3 after pop, got %d", v)
+	}
+}
+
+func TestResolveContentValueCounter(t *testing.T) {
+	c := &converter{counters: make(map[string][]int)}
+	c.resetCounter("section", 0)
+	c.incrementCounter("section", 1)
+
+	// Simple counter().
+	got := c.resolveContentValue(`counter(section)`)
+	if got != "1" {
+		t.Errorf("expected %q, got %q", "1", got)
+	}
+
+	// Counter with prefix string.
+	got = c.resolveContentValue(`"Section " counter(section)`)
+	if got != "Section 1" {
+		t.Errorf("expected %q, got %q", "Section 1", got)
+	}
+
+	// Counter with prefix and suffix.
+	got = c.resolveContentValue(`"[" counter(section) "]"`)
+	if got != "[1]" {
+		t.Errorf("expected %q, got %q", "[1]", got)
+	}
+}
+
+func TestResolveContentValueCounters(t *testing.T) {
+	c := &converter{counters: make(map[string][]int)}
+	c.resetCounter("sec", 0)
+	c.incrementCounter("sec", 1)
+	c.resetCounter("sec", 0) // nested
+	c.incrementCounter("sec", 1)
+
+	// counters() with default separator.
+	got := c.resolveContentValue(`counters(sec, ".")`)
+	if got != "1.1" {
+		t.Errorf("expected %q, got %q", "1.1", got)
+	}
+
+	// counters() with custom separator.
+	got = c.resolveContentValue(`counters(sec, " > ")`)
+	if got != "1 > 1" {
+		t.Errorf("expected %q, got %q", "1 > 1", got)
+	}
+}
+
+func TestCounterResetCustomStart(t *testing.T) {
+	c := &converter{counters: make(map[string][]int)}
+	c.resetCounter("item", 5)
+	c.incrementCounter("item", 1)
+	if v := c.getCounter("item"); v != 6 {
+		t.Errorf("expected 6 (start at 5, increment 1), got %d", v)
+	}
+}
+
+func TestCounterCustomIncrement(t *testing.T) {
+	c := &converter{counters: make(map[string][]int)}
+	c.resetCounter("item", 0)
+	c.incrementCounter("item", 2)
+	if v := c.getCounter("item"); v != 2 {
+		t.Errorf("expected 2 after increment by 2, got %d", v)
+	}
+	c.incrementCounter("item", 2)
+	if v := c.getCounter("item"); v != 4 {
+		t.Errorf("expected 4 after second increment by 2, got %d", v)
+	}
+}
+
+func TestCounterAutoInstantiate(t *testing.T) {
+	// counter-increment without counter-reset should auto-instantiate.
+	c := &converter{counters: make(map[string][]int)}
+	c.incrementCounter("x", 1)
+	if v := c.getCounter("x"); v != 1 {
+		t.Errorf("expected 1 for auto-instantiated counter, got %d", v)
+	}
+}
+
+func TestCSSCountersIntegration(t *testing.T) {
+	// Full integration test: counter-reset on parent, counter-increment on
+	// children, content: counter(section) in ::before pseudo-element.
+	htmlStr := `<style>
+		.list { counter-reset: section; }
+		.item { counter-increment: section; }
+		.item::before { content: counter(section) ". "; }
+	</style>
+	<div class="list">
+		<div class="item">First</div>
+		<div class="item">Second</div>
+		<div class="item">Third</div>
+	</div>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements from counter integration test")
+	}
+	// Verify layout works without panics.
+	for _, e := range elems {
+		e.PlanLayout(layout.LayoutArea{Width: 400, Height: 1000})
+	}
+}
+
+func TestCSSCountersNestedIntegration(t *testing.T) {
+	// Nested counters: counters(section, ".") should produce "1.1", "1.2", etc.
+	htmlStr := `<style>
+		.outer { counter-reset: section; }
+		.outer > div { counter-increment: section; counter-reset: section; }
+		.inner { counter-increment: section; }
+		.inner::before { content: counters(section, ".") " "; }
+	</style>
+	<div class="outer">
+		<div>
+			<div class="inner">A</div>
+			<div class="inner">B</div>
+		</div>
+	</div>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements from nested counter test")
+	}
+}
+
+func TestCSSCounterIncrementOnly(t *testing.T) {
+	// counter-increment without counter-reset — auto-instantiated per CSS spec.
+	htmlStr := `<style>
+		.item { counter-increment: x; }
+		.item::before { content: counter(x) " "; }
+	</style>
+	<div>
+		<div class="item">A</div>
+		<div class="item">B</div>
+	</div>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements from auto-instantiate counter test")
+	}
+}
